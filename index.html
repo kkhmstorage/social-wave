@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <!-- Prevent auto-zooming on mobile devices when pinching the canvas -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Poster Generator - ഞാനും പങ്കെടുക്കും</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        canvas {
+            touch-action: none; /* Crucial for custom touch gestures like pinch/drag */
+            background-color: #f3f4f6;
+            background-image: linear-gradient(45deg, #e5e7eb 25%, transparent 25%, transparent 75%, #e5e7eb 75%, #e5e7eb),
+                              linear-gradient(45deg, #e5e7eb 25%, transparent 25%, transparent 75%, #e5e7eb 75%, #e5e7eb);
+            background-size: 20px 20px;
+            background-position: 0 0, 10px 10px;
+            width: 100%;
+            height: auto;
+            max-width: 100%;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            cursor: move;
+        }
+        
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #15803d; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #166534; }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen font-sans text-gray-800 flex flex-col items-center">
+
+    <!-- Notification Toast -->
+    <div id="notificationArea" class="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 hidden rounded-lg p-4 text-sm font-medium shadow-lg transition-all duration-300"></div>
+
+    <div class="flex-grow max-w-2xl mx-auto p-4 sm:p-6 w-full flex flex-col gap-6">
+        
+        <header class="text-center mb-2">
+            <h1 class="text-2xl md:text-4xl font-bold text-green-800 mb-2">Poster Generator</h1>
+            <p class="text-gray-600 font-medium">ഞാനും പങ്കെടുക്കും - Upload your photo and join!</p>
+        </header>
+
+        <!-- PUBLIC VIEW -->
+        <div id="publicView" class="flex flex-col gap-6 items-center w-full">
+            
+            <!-- 1. Canvas/Preview Area (TOP) -->
+            <div class="w-full bg-white rounded-xl shadow-lg p-3 sm:p-4 flex justify-center items-center overflow-hidden relative">
+                <canvas id="posterCanvas" width="1080" height="1350" class="max-w-full sm:max-w-[400px]"></canvas>
+                
+                <!-- Loading Overlay -->
+                <div id="loadingOverlay" class="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center rounded-lg z-10 hidden">
+                    <div class="flex flex-col items-center text-green-700">
+                        <svg class="animate-spin h-10 w-10 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <p class="font-medium text-lg loading-text">Loading...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="w-full bg-white rounded-xl shadow-lg p-6 border-t-4 border-green-700 flex flex-col gap-5">
+                
+                <div id="noPosterWarning" class="bg-yellow-50 text-yellow-800 p-4 rounded-lg text-sm hidden text-center font-medium">
+                    No poster available right now. Admin is updating...
+                </div>
+
+                <div id="uploadSection">
+                    <label for="imageUpload" class="block text-sm font-bold text-gray-700 mb-2">1. Upload Your Photo</label>
+                    <input type="file" id="imageUpload" accept="image/png, image/jpeg, image/jpg" disabled
+                           class="block w-full text-sm text-gray-500
+                                  file:mr-4 file:py-2 file:px-4
+                                  file:rounded-full file:border-0
+                                  file:text-sm file:font-semibold
+                                  file:bg-green-50 file:text-green-700
+                                  hover:file:bg-green-100 cursor-pointer border border-gray-300 rounded-lg p-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                    
+                    <div id="instructions" class="hidden mt-3 bg-blue-50 text-blue-800 text-xs sm:text-sm p-3 rounded-lg border border-blue-100 flex gap-2 items-start">
+                        <span>💡</span>
+                        <p><b>Adjust your photo:</b> Drag to move. Use two fingers to pinch and zoom in/out (or mouse scroll on PC).</p>
+                    </div>
+                </div>
+
+                <div>
+                    <button id="downloadBtn" disabled
+                            class="w-full bg-green-700 hover:bg-green-800 text-white font-bold py-3 px-4 rounded-lg shadow-md transition duration-200 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        Download Poster
+                    </button>
+                </div>
+            </div>
+
+        </div>
+
+        <div id="adminView" class="hidden bg-white rounded-xl shadow-lg p-6 w-full border-t-4 border-blue-700">
+            <div class="flex justify-between items-center mb-6 border-b pb-4">
+                <div>
+                    <h2 class="text-xl sm:text-2xl font-bold text-gray-800">Admin Dashboard</h2>
+                    <p class="text-xs text-gray-500">പോസ്റ്റർ ടെംപ്ലേറ്റ് മാനേജ്‌മെന്റ് (Up to 5 MB Support)</p>
+                </div>
+                <button id="logoutBtn" class="text-sm bg-red-100 text-red-700 px-3 py-1 rounded hover:bg-red-200 font-medium">Logout</button>
+            </div>
+            
+            <!-- Instructions in Malayalam & English -->
+            <div class="text-gray-700 mb-6 bg-blue-50 p-4 rounded-lg border border-blue-100 text-sm">
+                <p class="font-bold text-blue-900 mb-1 flex items-center gap-2">
+                    <span>📢</span> പോസ്റ്റർ അപ്‌ലോഡ് നിർദ്ദേശങ്ങൾ (Admin Instructions):
+                </p>
+                <ul class="list-disc list-inside space-y-1 text-xs sm:text-sm text-gray-600 mt-2">
+                    <li>സുതാര്യമായ (Transparent) <b>PNG</b> ഫോർമാറ്റ് മാത്രം അപ്‌ലോഡ് ചെയ്യുക.</li>
+                    <li>ഫോട്ടോ വരേണ്ട ഭാഗം പൂർണ്ണമായും ട്രാൻസ്പരന്റ് (Cutout) ആയിരിക്കണം.</li>
+                    <li><b>5 MB</b> വരെയുള്ള ഉയർന്ന ക്വാളിറ്റി (High Quality) ഫയലുകൾ അപ്‌ലോഡ് ചെയ്യാം.</li>
+                </ul>
+            </div>
+
+            <div class="bg-gray-50 p-4 rounded-lg border border-gray-200 max-w-sm mx-auto">
+                <h3 class="font-bold text-lg text-gray-800 mb-3 text-center">Active Poster Design</h3>
+                <div class="mb-4 bg-slate-100 rounded border border-gray-300 overflow-hidden flex items-center justify-center p-2">
+                    <img id="adminPreview" src="https://placehold.co/1080x1350/e2e8f0/64748b?text=Empty" class="w-full h-48 sm:h-64 object-contain rounded shadow-sm" alt="Preview">
+                </div>
+
+                <div id="adminFileDetails" class="hidden text-xs text-blue-800 font-semibold mb-3 bg-blue-50 p-2.5 rounded border border-blue-200 text-center"></div>
+
+                <label class="block text-sm font-semibold text-gray-700 mb-1">Upload Transparent PNG (Max 5MB)</label>
+                <input type="file" id="adminUpload" accept="image/png" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 mb-4 cursor-pointer">
+                
+                <button id="savePosterBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition-colors disabled:opacity-50 shadow-md flex items-center justify-center gap-2">
+                    <svg id="saveSpinner" class="animate-spin h-5 w-5 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span id="saveBtnText">Save Design to Live</span>
+                </button>
+            </div>
+            
+            <div class="mt-8 text-center">
+                <button id="backToPublicBtn" class="text-blue-600 hover:underline font-medium">← Go to Public View</button>
+            </div>
+        </div>
+
+    </div>
+
+    <footer class="py-6 text-center text-gray-400 text-xs mt-auto w-full border-t">
+        &copy; 2026 Muhyissunna Secondary Madrasa | <button id="showLoginBtn" class="hover:text-gray-600 focus:outline-none">Admin Login</button>
+    </footer>
+
+    <!-- Admin Login Modal -->
+    <div id="loginModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm hidden items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-xl shadow-2xl p-6 sm:p-8 max-w-sm w-full transform transition-all">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6 text-center">Admin Access</h2>
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                <input type="text" id="usernameInput" class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none">
+            </div>
+            <div class="mb-6">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                <input type="password" id="passwordInput" class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none">
+            </div>
+            <div class="flex gap-3">
+                <button id="cancelLoginBtn" class="w-1/2 bg-gray-100 text-gray-700 font-medium py-2 px-4 rounded-lg hover:bg-gray-200 transition-colors">Cancel</button>
+                <button id="loginSubmitBtn" class="w-1/2 bg-green-700 text-white font-medium py-2 px-4 rounded-lg hover:bg-green-800 transition-colors">Login</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, 
+            doc, 
+            getDoc, 
+            setDoc, 
+            deleteDoc, 
+            onSnapshot, 
+            writeBatch 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global App State
+        let db, auth;
+        let activePoster = null;
+        
+        // 5 MB Configuration & Firestore Chunking
+        const MAX_FILE_SIZE = 5.25 * 1024 * 1024; // 5 MB max upload limit (with slight buffer)
+        const CHUNK_SIZE = 600 * 1024; // 600 KB chunk string length (well within Firestore 1 MB document limit)
+        
+        let templateImg = null;
+        let userImg = null;
+        
+        // Transform State
+        let userX = 0;
+        let userY = 0;
+        let userScale = 1;
+        
+        // Dragging & Pinching State
+        let isDragging = false;
+        let startDragX = 0;
+        let startDragY = 0;
+        let initialPinchDistance = null;
+        let startScale = 1;
+
+        // UI Elements
+        const DOM = {
+            notification: document.getElementById('notificationArea'),
+            publicView: document.getElementById('publicView'),
+            adminView: document.getElementById('adminView'),
+            loadingOverlay: document.getElementById('loadingOverlay'),
+            loadingText: document.querySelector('.loading-text'),
+            
+            // Public UI
+            noPosterWarning: document.getElementById('noPosterWarning'),
+            uploadSection: document.getElementById('uploadSection'),
+            imageUpload: document.getElementById('imageUpload'),
+            instructions: document.getElementById('instructions'),
+            downloadBtn: document.getElementById('downloadBtn'),
+            canvas: document.getElementById('posterCanvas'),
+            
+            // Login Modal
+            loginModal: document.getElementById('loginModal'),
+            showLoginBtn: document.getElementById('showLoginBtn'),
+            cancelLoginBtn: document.getElementById('cancelLoginBtn'),
+            loginSubmitBtn: document.getElementById('loginSubmitBtn'),
+            usernameInput: document.getElementById('usernameInput'),
+            passwordInput: document.getElementById('passwordInput'),
+            
+            // Admin UI
+            logoutBtn: document.getElementById('logoutBtn'),
+            backToPublicBtn: document.getElementById('backToPublicBtn'),
+            adminUpload: document.getElementById('adminUpload'),
+            adminPreview: document.getElementById('adminPreview'),
+            adminFileDetails: document.getElementById('adminFileDetails'),
+            savePosterBtn: document.getElementById('savePosterBtn'),
+            saveSpinner: document.getElementById('saveSpinner'),
+            saveBtnText: document.getElementById('saveBtnText')
+        };
+
+        const ctx = DOM.canvas.getContext('2d');
+
+        // Helper: Notifications
+        function showMessage(msg, type = 'error') {
+            DOM.notification.textContent = msg;
+            DOM.notification.className = `fixed top-4 left-1/2 transform -translate-x-1/2 z-50 rounded-lg p-4 text-sm font-bold shadow-xl transition-all duration-300 ${
+                type === 'error' ? 'bg-red-100 text-red-800 border-l-4 border-red-600' : 
+                type === 'success' ? 'bg-green-100 text-green-800 border-l-4 border-green-600' :
+                'bg-blue-100 text-blue-800 border-l-4 border-blue-600'
+            }`;
+            DOM.notification.classList.remove('hidden');
+            setTimeout(() => DOM.notification.classList.add('hidden'), 4000);
+        }
+
+        function showLoading(show, text = 'Loading...') {
+            if (show) {
+                DOM.loadingText.textContent = text;
+                DOM.loadingOverlay.classList.remove('hidden');
+            } else {
+                DOM.loadingOverlay.classList.add('hidden');
+            }
+        }
+
+        async function initFirebase() {
+            try {
+                // User's exact Firebase Configuration
+                const firebaseConfig = {
+                    apiKey: "AIzaSyC7_NrAwXtzVkOjeHKrgKYpISLAo7rEpQk",
+                    authDomain: "kkhm-islamic-and-arts-college.firebaseapp.com",
+                    projectId: "kkhm-islamic-and-arts-college",
+                    storageBucket: "kkhm-islamic-and-arts-college.firebasestorage.app",
+                    messagingSenderId: "119343295153",
+                    appId: "1:119343295153:web:81a49291a64622464b5090",
+                    measurementId: "G-T5ESZQKSPV"
+                };
+
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                const appId = 'kkhm-poster-app';
+
+                showLoading(true, "Connecting to Database...");
+                await signInAnonymously(auth);
+                
+                if (!auth.currentUser) {
+                    throw new Error("User not authenticated.");
+                }
+
+                // Listen for changes in the Poster document
+                const posterRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'main_poster');
+
+                let currentFetchToken = 0;
+
+                onSnapshot(posterRef, async (snapshot) => {
+                    const fetchToken = ++currentFetchToken;
+
+                    if (!snapshot.exists()) {
+                        updatePublicUI(false);
+                        return;
+                    }
+
+                    const data = snapshot.data();
+
+                    // Chunked poster handling (Supports 5 MB files)
+                    if (data.isChunked && data.totalChunks > 0) {
+                        const totalChunks = data.totalChunks;
+                        const sizeMB = data.fileSize ? ` (${(data.fileSize / (1024 * 1024)).toFixed(1)} MB)` : '';
+                        showLoading(true, `Loading High-Quality Poster${sizeMB}...`);
+
+                        try {
+                            const chunkPromises = [];
+                            for (let i = 0; i < totalChunks; i++) {
+                                const chunkRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', `poster_chunk_${i}`);
+                                chunkPromises.push(getDoc(chunkRef));
+                            }
+
+                            const chunkSnaps = await Promise.all(chunkPromises);
+
+                            // Stale listener check
+                            if (fetchToken !== currentFetchToken) return;
+
+                            const chunks = [];
+                            for (let i = 0; i < totalChunks; i++) {
+                                const snap = chunkSnaps[i];
+                                if (!snap.exists()) {
+                                    throw new Error(`Poster chunk ${i} is missing.`);
+                                }
+                                chunks.push(snap.data().chunk || '');
+                            }
+
+                            const fullBase64 = chunks.join('');
+                            activePoster = fullBase64;
+                            DOM.adminPreview.src = activePoster;
+                            loadTemplate(activePoster);
+
+                        } catch (err) {
+                            console.error("Failed to load poster chunks:", err);
+                            if (fetchToken === currentFetchToken) {
+                                showLoading(false);
+                                updatePublicUI(false);
+                                showMessage("പോസ്റ്റർ ലോഡ് ചെയ്യുന്നതിൽ തടസ്സം നേരിട്ടു. (Error loading poster)", "error");
+                            }
+                        }
+                    } else if (data.imageData) {
+                        // Legacy single-document image
+                        activePoster = data.imageData;
+                        DOM.adminPreview.src = activePoster;
+                        loadTemplate(activePoster);
+                    } else {
+                        updatePublicUI(false);
+                    }
+                }, (error) => {
+                    console.error("Error fetching poster:", error);
+                    updatePublicUI(false);
+                });
+
+                showLoading(false);
+
+            } catch (err) {
+                console.error("Firebase initialization failed:", err);
+                showLoading(false);
+                showMessage("Database connection failed. Please ensure 'Anonymous Auth' is enabled in Firebase Authentication.", "error");
+            }
+        }
+
+        function updatePublicUI(hasPoster) {
+            if (!hasPoster) {
+                DOM.noPosterWarning.classList.remove('hidden');
+                DOM.imageUpload.disabled = true;
+                drawEmptyCanvas();
+                return;
+            }
+            DOM.noPosterWarning.classList.add('hidden');
+            DOM.imageUpload.disabled = false;
+        }
+
+        function loadTemplate(dataUrl) {
+            showLoading(true, "Loading Template...");
+            const img = new Image();
+            img.onload = function() {
+                templateImg = img;
+                DOM.canvas.width = templateImg.width;
+                DOM.canvas.height = templateImg.height;
+                
+                updatePublicUI(true);
+                drawCanvas();
+                showLoading(false);
+            };
+            img.onerror = function() {
+                updatePublicUI(false);
+                showLoading(false);
+            };
+            img.src = dataUrl;
+        }
+
+        function drawEmptyCanvas() {
+            ctx.clearRect(0, 0, DOM.canvas.width, DOM.canvas.height);
+            ctx.fillStyle = "#e2e8f0";
+            ctx.fillRect(0, 0, DOM.canvas.width, DOM.canvas.height);
+            ctx.fillStyle = "#64748b";
+            ctx.font = "30px sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText("Waiting for Admin Design...", DOM.canvas.width/2, DOM.canvas.height/2);
+        }
+
+        function drawCanvas() {
+            if (!templateImg) {
+                drawEmptyCanvas();
+                return;
+            }
+
+            ctx.clearRect(0, 0, DOM.canvas.width, DOM.canvas.height);
+            
+            // Layer 1 (Bottom): User Photo
+            if (userImg) {
+                const drawWidth = userImg.width * userScale;
+                const drawHeight = userImg.height * userScale;
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.drawImage(userImg, userX, userY, drawWidth, drawHeight);
+            } else {
+                ctx.fillStyle = "#f8fafc";
+                ctx.fillRect(0, 0, DOM.canvas.width, DOM.canvas.height);
+            }
+
+            // Layer 2 (Top): Poster Template
+            ctx.drawImage(templateImg, 0, 0, DOM.canvas.width, DOM.canvas.height);
+        }
+
+        function resetUserImageTransform() {
+            if (!userImg || !templateImg) return;
+            const canvasRatio = DOM.canvas.width / DOM.canvas.height;
+            const imgRatio = userImg.width / userImg.height;
+            
+            if (imgRatio > canvasRatio) {
+                userScale = DOM.canvas.height / userImg.height; 
+            } else {
+                userScale = DOM.canvas.width / userImg.width; 
+            }
+            
+            userScale *= 1.1; // Default slight zoom to avoid empty edges
+
+            userX = (DOM.canvas.width - (userImg.width * userScale)) / 2;
+            userY = (DOM.canvas.height - (userImg.height * userScale)) / 2;
+        }
+
+        // Apply new scale while keeping the center of the canvas in place
+        function zoomTowardsCenter(newScale) {
+            const centerX = DOM.canvas.width / 2;
+            const centerY = DOM.canvas.height / 2;
+            const diffX = centerX - userX;
+            const diffY = centerY - userY;
+            const ratio = newScale / userScale;
+            userX = centerX - (diffX * ratio);
+            userY = centerY - (diffY * ratio);
+            userScale = newScale;
+        }
+
+        DOM.imageUpload.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    userImg = img;
+                    DOM.downloadBtn.disabled = false;
+                    DOM.instructions.classList.remove('hidden'); // Show instructions
+                    resetUserImageTransform();
+                    drawCanvas();
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // ----------------------------------------------------
+        // GESTURE & MOUSE CONTROLS (Drag & Zoom)
+        // ----------------------------------------------------
+        
+        function getPointerPos(clientX, clientY) {
+            const rect = DOM.canvas.getBoundingClientRect();
+            const scaleX = DOM.canvas.width / rect.width;
+            const scaleY = DOM.canvas.height / rect.height;
+            return {
+                x: (clientX - rect.left) * scaleX,
+                y: (clientY - rect.top) * scaleY
+            };
+        }
+
+        function getTouchDistance(touches) {
+            const dx = touches[0].clientX - touches[1].clientX;
+            const dy = touches[0].clientY - touches[1].clientY;
+            return Math.hypot(dx, dy);
+        }
+
+        // TOUCH EVENTS (Mobile)
+        DOM.canvas.addEventListener('touchstart', (e) => {
+            if (!userImg) return;
+            if (e.touches.length === 1) {
+                isDragging = true;
+                const pos = getPointerPos(e.touches[0].clientX, e.touches[0].clientY);
+                startDragX = pos.x;
+                startDragY = pos.y;
+            } else if (e.touches.length === 2) {
+                isDragging = false; 
+                initialPinchDistance = getTouchDistance(e.touches);
+                startScale = userScale;
+            }
+        }, { passive: false });
+
+        DOM.canvas.addEventListener('touchmove', (e) => {
+            if (!userImg) return;
+            e.preventDefault(); // Prevent page scroll
+            
+            if (e.touches.length === 1 && isDragging) {
+                // Handle Drag
+                const pos = getPointerPos(e.touches[0].clientX, e.touches[0].clientY);
+                userX += pos.x - startDragX;
+                userY += pos.y - startDragY;
+                startDragX = pos.x;
+                startDragY = pos.y;
+                requestAnimationFrame(drawCanvas);
+            } else if (e.touches.length === 2 && initialPinchDistance) {
+                // Handle Pinch Zoom
+                const currentDistance = getTouchDistance(e.touches);
+                const scaleModifier = currentDistance / initialPinchDistance;
+                const newScale = Math.max(0.1, Math.min(startScale * scaleModifier, 5)); // limit bounds
+                zoomTowardsCenter(newScale);
+                requestAnimationFrame(drawCanvas);
+            }
+        }, { passive: false });
+
+        DOM.canvas.addEventListener('touchend', (e) => {
+            if (e.touches.length < 2) initialPinchDistance = null;
+            if (e.touches.length === 0) isDragging = false;
+        });
+
+        // MOUSE EVENTS (Desktop Drag)
+        DOM.canvas.addEventListener('mousedown', (e) => {
+            if (!userImg) return;
+            isDragging = true;
+            const pos = getPointerPos(e.clientX, e.clientY);
+            startDragX = pos.x;
+            startDragY = pos.y;
+            DOM.canvas.style.cursor = 'grabbing';
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging || !userImg) return;
+            const pos = getPointerPos(e.clientX, e.clientY);
+            userX += pos.x - startDragX;
+            userY += pos.y - startDragY;
+            startDragX = pos.x;
+            startDragY = pos.y;
+            requestAnimationFrame(drawCanvas);
+        });
+
+        window.addEventListener('mouseup', () => {
+            isDragging = false;
+            DOM.canvas.style.cursor = 'move';
+        });
+
+        // MOUSE WHEEL EVENT (Desktop Zoom)
+        DOM.canvas.addEventListener('wheel', (e) => {
+            if (!userImg) return;
+            e.preventDefault(); // Prevent page scroll
+            const scaleAmount = -e.deltaY * 0.001; // zoom speed
+            const newScale = Math.max(0.1, Math.min(userScale * (1 + scaleAmount), 5));
+            zoomTowardsCenter(newScale);
+            requestAnimationFrame(drawCanvas);
+        }, { passive: false });
+
+
+        // ----------------------------------------------------
+        // DOWNLOAD & ADMIN LOGIC
+        // ----------------------------------------------------
+
+        DOM.downloadBtn.addEventListener('click', function() {
+            if (!templateImg || !userImg) return;
+            try {
+                if (DOM.canvas.toBlob) {
+                    DOM.canvas.toBlob((blob) => {
+                        if (!blob) {
+                            fallbackDownload();
+                            return;
+                        }
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.download = 'Muhyissunna-Poster.png';
+                        link.href = url;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        setTimeout(() => URL.revokeObjectURL(url), 2000);
+                        showMessage('Poster downloaded successfully!', 'success');
+                    }, 'image/png');
+                } else {
+                    fallbackDownload();
+                }
+            } catch (err) {
+                fallbackDownload();
+            }
+        });
+
+        function fallbackDownload() {
+            try {
+                const dataUrl = DOM.canvas.toDataURL('image/png');
+                const link = document.createElement('a');
+                link.download = 'Muhyissunna-Poster.png';
+                link.href = dataUrl;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                showMessage('Poster downloaded successfully!', 'success');
+            } catch (err) {
+                console.error(err);
+                showMessage('Download failed.', 'error');
+            }
+        }
+
+        // Login Modal Logic
+        DOM.showLoginBtn.addEventListener('click', () => {
+            DOM.loginModal.classList.remove('hidden');
+            DOM.loginModal.classList.add('flex');
+            DOM.usernameInput.value = '';
+            DOM.passwordInput.value = '';
+        });
+
+        DOM.cancelLoginBtn.addEventListener('click', () => {
+            DOM.loginModal.classList.add('hidden');
+            DOM.loginModal.classList.remove('flex');
+        });
+
+        DOM.loginSubmitBtn.addEventListener('click', () => {
+            if (DOM.usernameInput.value === 'admin' && DOM.passwordInput.value === 'admin123') {
+                DOM.loginModal.classList.add('hidden');
+                DOM.loginModal.classList.remove('flex');
+                
+                DOM.publicView.classList.add('hidden');
+                DOM.adminView.classList.remove('hidden');
+                showMessage('Welcome, Admin', 'success');
+            } else {
+                showMessage('Invalid username or password', 'error');
+            }
+        });
+
+        DOM.logoutBtn.addEventListener('click', () => {
+            DOM.adminView.classList.add('hidden');
+            DOM.publicView.classList.remove('hidden');
+            showMessage('Logged out successfully', 'success');
+        });
+
+        DOM.backToPublicBtn.addEventListener('click', () => {
+            DOM.adminView.classList.add('hidden');
+            DOM.publicView.classList.remove('hidden');
+        });
+
+        function resetSaveBtn() {
+            DOM.savePosterBtn.disabled = false;
+            if (DOM.saveSpinner) DOM.saveSpinner.classList.add('hidden');
+            if (DOM.saveBtnText) DOM.saveBtnText.textContent = 'Save Design to Live';
+        }
+
+        function setSaveBtnLoading(text) {
+            DOM.savePosterBtn.disabled = true;
+            if (DOM.saveSpinner) DOM.saveSpinner.classList.remove('hidden');
+            if (DOM.saveBtnText) DOM.saveBtnText.textContent = text;
+        }
+
+        // Instant preview and 5MB validation when admin selects a file
+        DOM.adminUpload.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) {
+                if (DOM.adminFileDetails) DOM.adminFileDetails.classList.add('hidden');
+                return;
+            }
+
+            const isPng = file.type === 'image/png' || file.name.toLowerCase().endsWith('.png');
+            if (!isPng) {
+                showMessage('സുതാര്യതയ്ക്കായി ദയവായി ഒരു PNG ഇമേജ് തിരഞ്ഞെടുക്കുക (PNG required for transparency).', 'error');
+                DOM.adminUpload.value = '';
+                if (DOM.adminFileDetails) DOM.adminFileDetails.classList.add('hidden');
+                return;
+            }
+
+            if (file.size > MAX_FILE_SIZE) {
+                const currentMB = (file.size / (1024 * 1024)).toFixed(2);
+                showMessage(`ഫയൽ 5 MB-ൽ കൂടുതലാണ്! (${currentMB} MB). ദയവായി 5 MB-ൽ താഴെയുള്ള ഫയൽ തിരഞ്ഞെടുക്കുക.`, 'error');
+                DOM.adminUpload.value = '';
+                if (DOM.adminFileDetails) DOM.adminFileDetails.classList.add('hidden');
+                return;
+            }
+
+            const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+            if (DOM.adminFileDetails) {
+                DOM.adminFileDetails.textContent = `📁 തിരഞ്ഞെടുത്ത ഫയൽ: ${file.name} (${sizeMB} MB) - Ready to Save`;
+                DOM.adminFileDetails.classList.remove('hidden');
+            }
+
+            // Immediate local preview for Admin
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                DOM.adminPreview.src = evt.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // Save Poster to Firebase (Supports up to 5 MB with chunked Firestore storage)
+        DOM.savePosterBtn.addEventListener('click', async () => {
+            const file = DOM.adminUpload.files[0];
+            
+            if (!file) {
+                showMessage('ദയവായി ആദ്യം ഒരു പോസ്റ്റർ ഫയൽ തിരഞ്ഞെടുക്കുക. (Please select an image file first)', 'error');
+                return;
+            }
+
+            const isPng = file.type === 'image/png' || file.name.toLowerCase().endsWith('.png');
+            if (!isPng) {
+                showMessage('സുതാര്യമായ PNG ഇമേജ് മാത്രം അപ്‌ലോഡ് ചെയ്യുക (PNG required).', 'error');
+                return;
+            }
+
+            if (file.size > MAX_FILE_SIZE) {
+                const currentMB = (file.size / (1024 * 1024)).toFixed(2);
+                showMessage(`ഫയൽ 5 MB-ൽ കൂടുതലാണ് (${currentMB} MB). ദയവായി 5 MB-ൽ താഴെയുള്ള ഫയൽ നൽകുക.`, 'error');
+                return;
+            }
+
+            if (!auth || !auth.currentUser) {
+                showMessage('Database not connected. Please refresh and try again.', 'error');
+                return;
+            }
+
+            try {
+                setSaveBtnLoading('Reading 5MB File...');
+                
+                const reader = new FileReader();
+                reader.onerror = () => {
+                    showMessage('ഫയൽ റീഡ് ചെയ്യുന്നതിൽ പരാജയപ്പെട്ടു (Failed to read file).', 'error');
+                    resetSaveBtn();
+                };
+
+                reader.onload = async function(e) {
+                    try {
+                        const base64Data = e.target.result;
+                        const totalChars = base64Data.length;
+                        const numChunks = Math.ceil(totalChars / CHUNK_SIZE);
+                        
+                        setSaveBtnLoading(`Preparing ${numChunks} Cloud Chunks...`);
+
+                        const appId = 'kkhm-poster-app';
+                        const mainPosterRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'main_poster');
+
+                        // Check previous chunk count for cleanup
+                        let prevTotalChunks = 0;
+                        try {
+                            const curSnap = await getDoc(mainPosterRef);
+                            if (curSnap.exists()) {
+                                prevTotalChunks = curSnap.data().totalChunks || 0;
+                            }
+                        } catch (checkErr) {
+                            console.warn("Could not check previous chunk count:", checkErr);
+                        }
+
+                        setSaveBtnLoading(`Saving ${numChunks} Chunks to Cloud...`);
+
+                        const metadata = {
+                            isChunked: true,
+                            totalChunks: numChunks,
+                            chunkSize: CHUNK_SIZE,
+                            totalChars: totalChars,
+                            fileSize: file.size,
+                            fileName: file.name,
+                            updatedAt: new Date().toISOString()
+                        };
+
+                        // Use writeBatch (atomic, single-trip write)
+                        try {
+                            const batch = writeBatch(db);
+                            batch.set(mainPosterRef, metadata);
+
+                            for (let i = 0; i < numChunks; i++) {
+                                const chunkRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', `poster_chunk_${i}`);
+                                const chunkPart = base64Data.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+                                batch.set(chunkRef, {
+                                    index: i,
+                                    chunk: chunkPart,
+                                    updatedAt: metadata.updatedAt
+                                });
+                            }
+
+                            // Delete excess previous chunks
+                            if (prevTotalChunks > numChunks) {
+                                for (let j = numChunks; j < prevTotalChunks; j++) {
+                                    const oldChunkRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', `poster_chunk_${j}`);
+                                    batch.delete(oldChunkRef);
+                                }
+                            }
+
+                            setSaveBtnLoading('Finalizing Upload...');
+                            await batch.commit();
+
+                        } catch (batchErr) {
+                            console.warn("writeBatch fallback to sequential writes:", batchErr);
+                            // Fallback to sequential chunk saving if batch fails
+                            for (let i = 0; i < numChunks; i++) {
+                                setSaveBtnLoading(`Saving Chunk ${i + 1}/${numChunks}...`);
+                                const chunkRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', `poster_chunk_${i}`);
+                                const chunkPart = base64Data.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+                                await setDoc(chunkRef, {
+                                    index: i,
+                                    chunk: chunkPart,
+                                    updatedAt: metadata.updatedAt
+                                });
+                            }
+                            if (prevTotalChunks > numChunks) {
+                                for (let j = numChunks; j < prevTotalChunks; j++) {
+                                    const oldChunkRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', `poster_chunk_${j}`);
+                                    try { await deleteDoc(oldChunkRef); } catch(dErr) {}
+                                }
+                            }
+                            await setDoc(mainPosterRef, metadata);
+                        }
+
+                        // Update local template & preview
+                        activePoster = base64Data;
+                        DOM.adminPreview.src = activePoster;
+                        loadTemplate(activePoster);
+
+                        const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+                        showMessage(`പോസ്റ്റർ വിജയകരമായി അപ്‌ലോഡ് ചെയ്തു! (${sizeMB} MB High-Quality Poster Live)`, 'success');
+                        resetSaveBtn();
+
+                    } catch (err) {
+                        console.error("Firestore save error:", err);
+                        showMessage('Upload failed: ' + (err.message || 'Error saving to database'), 'error');
+                        resetSaveBtn();
+                    }
+                };
+
+                reader.readAsDataURL(file);
+
+            } catch (outerErr) {
+                console.error("Outer error:", outerErr);
+                showMessage('Upload failed: ' + (outerErr.message || 'Error occurred'), 'error');
+                resetSaveBtn();
+            }
+        });
+
+        // Initialize Firebase on load
+        window.addEventListener('DOMContentLoaded', initFirebase);
+
+    </script>
+</body>
+</html>
