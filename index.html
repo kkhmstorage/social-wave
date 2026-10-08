@@ -5,7 +5,11 @@
     <!-- Prevent auto-zooming on mobile devices when pinching the canvas -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Poster Generator - ഞാനും പങ്കെടുക്കും</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Preconnect to Google APIs for fastest DNS & TLS resolution -->
+    <link rel="preconnect" href="https://firestore.googleapis.com">
+    <link rel="dns-prefetch" href="https://firestore.googleapis.com">
+    <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="tailwind.css">
     <style>
         canvas {
             touch-action: none; /* Crucial for custom touch gestures like pinch/drag */
@@ -47,14 +51,18 @@
             <div class="w-full bg-white rounded-xl shadow-lg p-3 sm:p-4 flex justify-center items-center overflow-hidden relative">
                 <canvas id="posterCanvas" width="1080" height="1350" class="max-w-full sm:max-w-[400px]"></canvas>
                 
-                <!-- Loading Overlay -->
-                <div id="loadingOverlay" class="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center rounded-lg z-10 hidden">
-                    <div class="flex flex-col items-center text-green-700">
-                        <svg class="animate-spin h-10 w-10 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <!-- Fast Loading Overlay with Real-time Progress -->
+                <div id="loadingOverlay" class="absolute inset-0 bg-white/90 backdrop-blur-sm flex items-center justify-center rounded-lg z-10 hidden">
+                    <div class="flex flex-col items-center text-green-700 p-4 text-center max-w-xs w-full">
+                        <svg class="animate-spin h-10 w-10 mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        <p class="font-medium text-lg loading-text">Loading...</p>
+                        <p class="font-bold text-sm sm:text-base loading-text text-gray-800">പോസ്റ്റർ തയ്യാറാക്കുന്നു...</p>
+                        <div id="downloadProgressBarContainer" class="w-full bg-gray-200 rounded-full h-2 mt-3 overflow-hidden hidden">
+                            <div id="downloadProgressBar" class="bg-green-600 h-2 rounded-full transition-all duration-200" style="width: 0%"></div>
+                        </div>
+                        <p id="downloadProgressPercent" class="text-xs text-gray-500 mt-1.5 font-bold hidden">0%</p>
                     </div>
                 </div>
             </div>
@@ -262,6 +270,11 @@
         let initialPinchDistance = null;
         let startScale = 1;
 
+        // Poster Pipeline State
+        let isPosterLoaded = false;
+        let currentPosterUpdatedAt = null;
+        const FIRESTORE_BASE = 'https://firestore.googleapis.com/v1/projects/kkhm-islamic-and-arts-college/databases/(default)/documents/artifacts/kkhm-poster-app/public/data/settings';
+
         // UI Elements
         const DOM = {
             notification: document.getElementById('notificationArea'),
@@ -269,6 +282,9 @@
             adminView: document.getElementById('adminView'),
             loadingOverlay: document.getElementById('loadingOverlay'),
             loadingText: document.querySelector('.loading-text'),
+            downloadProgressBarContainer: document.getElementById('downloadProgressBarContainer'),
+            downloadProgressBar: document.getElementById('downloadProgressBar'),
+            downloadProgressPercent: document.getElementById('downloadProgressPercent'),
             
             // Public UI
             noPosterWarning: document.getElementById('noPosterWarning'),
@@ -322,18 +338,221 @@
             setTimeout(() => DOM.notification.classList.add('hidden'), 4000);
         }
 
-        function showLoading(show, text = 'Loading...') {
-            if (show) {
+        // Progress bar updater
+        function updateDownloadProgress(pct, text) {
+            if (DOM.downloadProgressBarContainer) {
+                if (pct >= 0 && pct < 100) {
+                    DOM.downloadProgressBarContainer.classList.remove('hidden');
+                    if (DOM.downloadProgressPercent) {
+                        DOM.downloadProgressPercent.classList.remove('hidden');
+                        DOM.downloadProgressPercent.textContent = `${pct}%`;
+                    }
+                    if (DOM.downloadProgressBar) DOM.downloadProgressBar.style.width = `${pct}%`;
+                } else {
+                    DOM.downloadProgressBarContainer.classList.add('hidden');
+                    if (DOM.downloadProgressPercent) DOM.downloadProgressPercent.classList.add('hidden');
+                }
+            }
+            if (text && DOM.loadingText) {
                 DOM.loadingText.textContent = text;
-                DOM.loadingOverlay.classList.remove('hidden');
-            } else {
-                DOM.loadingOverlay.classList.add('hidden');
             }
         }
 
+        function showLoading(show, text = 'Loading...') {
+            if (show) {
+                if (DOM.loadingText) DOM.loadingText.textContent = text;
+                if (DOM.loadingOverlay) DOM.loadingOverlay.classList.remove('hidden');
+            } else {
+                if (DOM.loadingOverlay) DOM.loadingOverlay.classList.add('hidden');
+                updateDownloadProgress(-1);
+            }
+        }
+
+        // --- IndexedDB Caching Engine (Stale-While-Revalidate) ---
+        const DB_NAME = 'SocialWavePosterDB';
+        const DB_VERSION = 1;
+        const STORE_NAME = 'posters';
+
+        function openPosterDB() {
+            return new Promise((resolve) => {
+                if (!('indexedDB' in window)) {
+                    resolve(null);
+                    return;
+                }
+                try {
+                    const req = indexedDB.open(DB_NAME, DB_VERSION);
+                    req.onupgradeneeded = (e) => {
+                        const idb = e.target.result;
+                        if (!idb.objectStoreNames.contains(STORE_NAME)) {
+                            idb.createObjectStore(STORE_NAME, { keyPath: 'id' });
+                        }
+                    };
+                    req.onsuccess = () => resolve(req.result);
+                    req.onerror = () => resolve(null);
+                } catch (e) {
+                    resolve(null);
+                }
+            });
+        }
+
+        async function getCachedPoster() {
+            try {
+                const idb = await openPosterDB();
+                if (!idb) return null;
+                return new Promise((resolve) => {
+                    const tx = idb.transaction(STORE_NAME, 'readonly');
+                    const store = tx.objectStore(STORE_NAME);
+                    const req = store.get('active_poster');
+                    req.onsuccess = () => resolve(req.result || null);
+                    req.onerror = () => resolve(null);
+                });
+            } catch (err) {
+                console.warn('Cache read error:', err);
+                return null;
+            }
+        }
+
+        async function setCachedPoster(data) {
+            try {
+                const idb = await openPosterDB();
+                if (!idb) return false;
+                return new Promise((resolve) => {
+                    const tx = idb.transaction(STORE_NAME, 'readwrite');
+                    const store = tx.objectStore(STORE_NAME);
+                    store.put({ id: 'active_poster', ...data });
+                    tx.oncomplete = () => resolve(true);
+                    tx.onerror = () => resolve(false);
+                });
+            } catch (err) {
+                console.warn('Cache write error:', err);
+                return false;
+            }
+        }
+
+        // --- High-Speed Poster Loading Pipeline ---
+        async function loadPosterPipeline() {
+            // STEP 1: INSTANT CACHE RENDER (< 50ms)
+            try {
+                const cached = await getCachedPoster();
+                if (cached && cached.base64) {
+                    console.log("⚡ Instant poster loaded from IndexedDB cache!");
+                    activePoster = cached.base64;
+                    currentPosterUpdatedAt = cached.updatedAt || null;
+                    if (DOM.adminPreview) DOM.adminPreview.src = activePoster;
+                    loadTemplate(activePoster, false, () => {
+                        isPosterLoaded = true;
+                    });
+                }
+            } catch (cacheErr) {
+                console.warn("Cached poster check error:", cacheErr);
+            }
+
+            // STEP 2: FAST BACKGROUND SYNC VIA DIRECT REST
+            syncPosterWithCloud();
+        }
+
+        async function syncPosterWithCloud() {
+            const isBackground = isPosterLoaded;
+            if (!isBackground) {
+                showLoading(true, "പോസ്റ്റർ തയ്യാറാക്കുന്നു...");
+                updateDownloadProgress(10);
+            }
+
+            try {
+                const metaRes = await fetch(`${FIRESTORE_BASE}/main_poster`, { cache: 'no-cache' });
+                if (!metaRes.ok) {
+                    if (metaRes.status === 404) {
+                        if (!isPosterLoaded) updatePublicUI(false);
+                        showLoading(false);
+                        return;
+                    }
+                    throw new Error(`REST metadata HTTP ${metaRes.status}`);
+                }
+
+                const metaDoc = await metaRes.json();
+                const fields = metaDoc.fields || {};
+                const isChunked = fields.isChunked?.booleanValue ?? false;
+                const totalChunks = parseInt(fields.totalChunks?.integerValue || '0', 10);
+                const updatedAt = fields.updatedAt?.stringValue || null;
+                const fileSize = parseInt(fields.fileSize?.integerValue || '0', 10);
+                const legacyImageData = fields.imageData?.stringValue || null;
+
+                // If local cache is already up to date, skip download completely!
+                if (isPosterLoaded && currentPosterUpdatedAt && updatedAt === currentPosterUpdatedAt) {
+                    console.log("✅ Local cache is completely up to date. Zero bandwidth used!");
+                    return;
+                }
+
+                let fullBase64 = '';
+
+                if (isChunked && totalChunks > 0) {
+                    if (!isBackground) {
+                        const sizeMB = fileSize ? ` (${(fileSize / (1024 * 1024)).toFixed(1)} MB)` : '';
+                        showLoading(true, `പോസ്റ്റർ ഡൗൺലോഡ് ചെയ്യുന്നു${sizeMB}...`);
+                        updateDownloadProgress(20);
+                    }
+
+                    // Parallel HTTP/2 chunk downloads
+                    const chunkPromises = [];
+                    let loadedChunks = 0;
+
+                    for (let i = 0; i < totalChunks; i++) {
+                        const p = fetch(`${FIRESTORE_BASE}/poster_chunk_${i}`)
+                            .then(r => {
+                                if (!r.ok) throw new Error(`Chunk ${i} error ${r.status}`);
+                                return r.json();
+                            })
+                            .then(doc => {
+                                loadedChunks++;
+                                if (!isBackground) {
+                                    const pct = Math.min(95, Math.round(20 + (loadedChunks / totalChunks) * 75));
+                                    updateDownloadProgress(pct);
+                                }
+                                return { index: i, chunk: doc.fields?.chunk?.stringValue || '' };
+                            });
+                        chunkPromises.push(p);
+                    }
+
+                    const chunkResults = await Promise.all(chunkPromises);
+                    chunkResults.sort((a, b) => a.index - b.index);
+                    fullBase64 = chunkResults.map(c => c.chunk).join('');
+
+                } else if (legacyImageData) {
+                    fullBase64 = legacyImageData;
+                }
+
+                if (fullBase64) {
+                    activePoster = fullBase64;
+                    currentPosterUpdatedAt = updatedAt;
+                    if (DOM.adminPreview) DOM.adminPreview.src = activePoster;
+
+                    await setCachedPoster({
+                        base64: fullBase64,
+                        updatedAt: updatedAt,
+                        totalChunks: totalChunks,
+                        fileSize: fileSize
+                    });
+
+                    loadTemplate(activePoster, !isBackground, () => {
+                        isPosterLoaded = true;
+                        showLoading(false);
+                    });
+                } else {
+                    if (!isPosterLoaded) updatePublicUI(false);
+                    showLoading(false);
+                }
+
+            } catch (err) {
+                console.warn("Fast REST sync error, fallback to Firestore SDK:", err);
+                if (!isPosterLoaded) {
+                    showLoading(true, "Connecting to Cloud...");
+                }
+            }
+        }
+
+        // --- Firebase SDK (Background & Real-time Admin Sync) ---
         async function initFirebase() {
             try {
-                // User's exact Firebase Configuration
                 const firebaseConfig = {
                     apiKey: "AIzaSyC7_NrAwXtzVkOjeHKrgKYpISLAo7rEpQk",
                     authDomain: "kkhm-islamic-and-arts-college.firebaseapp.com",
@@ -348,36 +567,29 @@
                 db = getFirestore(app);
                 auth = getAuth(app);
 
+                // Non-blocking background authentication
+                signInAnonymously(auth).catch(e => console.warn("Background auth:", e));
+
                 const appId = 'kkhm-poster-app';
-
-                showLoading(true, "Connecting to Database...");
-                await signInAnonymously(auth);
-                
-                if (!auth.currentUser) {
-                    throw new Error("User not authenticated.");
-                }
-
-                // Listen for changes in the Poster document
                 const posterRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'main_poster');
 
-                let currentFetchToken = 0;
-
+                // onSnapshot listener for live changes
                 onSnapshot(posterRef, async (snapshot) => {
-                    const fetchToken = ++currentFetchToken;
-
                     if (!snapshot.exists()) {
-                        updatePublicUI(false);
+                        if (!isPosterLoaded) updatePublicUI(false);
                         return;
                     }
 
                     const data = snapshot.data();
+                    const cloudUpdatedAt = data.updatedAt;
 
-                    // Chunked poster handling (Supports 5 MB files)
+                    // If already loaded this exact version, avoid duplicate work
+                    if (isPosterLoaded && currentPosterUpdatedAt && cloudUpdatedAt === currentPosterUpdatedAt) {
+                        return;
+                    }
+
                     if (data.isChunked && data.totalChunks > 0) {
                         const totalChunks = data.totalChunks;
-                        const sizeMB = data.fileSize ? ` (${(data.fileSize / (1024 * 1024)).toFixed(1)} MB)` : '';
-                        showLoading(true, `Loading High-Quality Poster${sizeMB}...`);
-
                         try {
                             const chunkPromises = [];
                             for (let i = 0; i < totalChunks; i++) {
@@ -386,51 +598,55 @@
                             }
 
                             const chunkSnaps = await Promise.all(chunkPromises);
-
-                            // Stale listener check
-                            if (fetchToken !== currentFetchToken) return;
-
-                            const chunks = [];
-                            for (let i = 0; i < totalChunks; i++) {
-                                const snap = chunkSnaps[i];
-                                if (!snap.exists()) {
-                                    throw new Error(`Poster chunk ${i} is missing.`);
-                                }
-                                chunks.push(snap.data().chunk || '');
-                            }
-
+                            const chunks = chunkSnaps.map(snap => snap.data()?.chunk || '');
                             const fullBase64 = chunks.join('');
+
                             activePoster = fullBase64;
-                            DOM.adminPreview.src = activePoster;
-                            loadTemplate(activePoster);
+                            currentPosterUpdatedAt = cloudUpdatedAt;
+                            if (DOM.adminPreview) DOM.adminPreview.src = activePoster;
+
+                            await setCachedPoster({
+                                base64: fullBase64,
+                                updatedAt: cloudUpdatedAt,
+                                totalChunks: totalChunks,
+                                fileSize: data.fileSize || 0
+                            });
+
+                            loadTemplate(activePoster, false, () => {
+                                isPosterLoaded = true;
+                                showLoading(false);
+                            });
 
                         } catch (err) {
-                            console.error("Failed to load poster chunks:", err);
-                            if (fetchToken === currentFetchToken) {
-                                showLoading(false);
-                                updatePublicUI(false);
-                                showMessage("പോസ്റ്റർ ലോഡ് ചെയ്യുന്നതിൽ തടസ്സം നേരിട്ടു. (Error loading poster)", "error");
-                            }
+                            console.error("Firestore onSnapshot chunk fetch error:", err);
                         }
                     } else if (data.imageData) {
-                        // Legacy single-document image
                         activePoster = data.imageData;
-                        DOM.adminPreview.src = activePoster;
-                        loadTemplate(activePoster);
-                    } else {
-                        updatePublicUI(false);
+                        currentPosterUpdatedAt = cloudUpdatedAt;
+                        if (DOM.adminPreview) DOM.adminPreview.src = activePoster;
+
+                        await setCachedPoster({
+                            base64: activePoster,
+                            updatedAt: cloudUpdatedAt,
+                            totalChunks: 1,
+                            fileSize: 0
+                        });
+
+                        loadTemplate(activePoster, false, () => {
+                            isPosterLoaded = true;
+                            showLoading(false);
+                        });
                     }
                 }, (error) => {
-                    console.error("Error fetching poster:", error);
-                    updatePublicUI(false);
+                    console.warn("Firestore onSnapshot error:", error);
+                    if (!isPosterLoaded) {
+                        updatePublicUI(false);
+                        showLoading(false);
+                    }
                 });
-
-                showLoading(false);
 
             } catch (err) {
                 console.error("Firebase initialization failed:", err);
-                showLoading(false);
-                showMessage("Database connection failed. Please ensure 'Anonymous Auth' is enabled in Firebase Authentication.", "error");
             }
         }
 
@@ -445,8 +661,8 @@
             DOM.imageUpload.disabled = false;
         }
 
-        function loadTemplate(dataUrl) {
-            showLoading(true, "Loading Template...");
+        function loadTemplate(dataUrl, showSpinner = true, callback = null) {
+            if (showSpinner) showLoading(true, "Loading Template...");
             const img = new Image();
             img.onload = function() {
                 templateImg = img;
@@ -456,10 +672,12 @@
                 updatePublicUI(true);
                 drawCanvas();
                 showLoading(false);
+                if (callback) callback(true);
             };
             img.onerror = function() {
-                updatePublicUI(false);
+                if (!isPosterLoaded) updatePublicUI(false);
                 showLoading(false);
+                if (callback) callback(false);
             };
             img.src = dataUrl;
         }
@@ -1027,8 +1245,18 @@
 
                         // Update local template & preview
                         activePoster = base64Data;
+                        currentPosterUpdatedAt = metadata.updatedAt;
                         DOM.adminPreview.src = activePoster;
-                        loadTemplate(activePoster);
+                        loadTemplate(activePoster, false);
+
+                        // Save immediately to local IndexedDB cache
+                        await setCachedPoster({
+                            base64: base64Data,
+                            updatedAt: metadata.updatedAt,
+                            totalChunks: numChunks,
+                            fileSize: file.size,
+                            fileName: file.name
+                        });
 
                         updateAdminProgress(100, 'Upload Complete!');
                         const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
@@ -1051,8 +1279,11 @@
             }
         });
 
-        // Initialize Firebase on load
-        window.addEventListener('DOMContentLoaded', initFirebase);
+        // Initialize high-speed pipeline and background Firebase
+        window.addEventListener('DOMContentLoaded', () => {
+            loadPosterPipeline();
+            initFirebase();
+        });
 
     </script>
 </body>
